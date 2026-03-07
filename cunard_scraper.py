@@ -244,7 +244,13 @@ class CunardScraper:
     
     async def run(self):
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.config.get('headless', False))
+            # Try WebKit (Safari) first as it may work better with Cunard site
+            try:
+                logger.info("Launching WebKit browser (Safari)...")
+                browser = await p.webkit.launch(headless=False)
+            except Exception as e:
+                logger.warning(f"WebKit not available ({e}), falling back to Chromium")
+                browser = await p.chromium.launch(headless=self.config.get('headless', False))
             context_args = {'viewport': {'width': 1280, 'height': 800}}
             if self.storage_state_file.exists():
                 logger.info("Loading saved session...")
