@@ -306,10 +306,25 @@ class CunardScraper:
                 
                 if '/landing' in current_url or current_url == 'https://myvoyage.cunard.com/':
                     logger.info("On landing page, looking for Daily Programme button...")
+                    
+                    # Wait for page to fully load
+                    await asyncio.sleep(5)
+                    
+                    # Try to find and click the hamburger menu to open sidebar
+                    try:
+                        menu_btn = await page.query_selector('button[aria-label="menu"], button svg[id="webapp-menu-navigation"]')
+                        if menu_btn:
+                            await menu_btn.click()
+                            logger.info("Clicked menu button to open sidebar")
+                            await asyncio.sleep(2)
+                    except Exception as e:
+                        logger.info(f"Menu button not found or error: {e}")
+                    
                     # Try to click Daily Programme button - look for the sidebar link
                     dp_selectors = [
                         'a[href="/dailyProgramme"]',
-                        'a[href*="dailyProgramme"]',
+                        'nav a[href*="dailyProgramme"]',
+                        '.sidebar_left_view a[href*="dailyProgramme"]',
                         'a:has-text("Daily Programme")',
                         'a:has-text("Daily programme")',
                         'button:has-text("Daily Programme")',
@@ -328,6 +343,7 @@ class CunardScraper:
                                 clicked = True
                                 break
                         except Exception as e:
+                            logger.debug(f"Selector {selector} failed: {e}")
                             continue
                     
                     if not clicked:
