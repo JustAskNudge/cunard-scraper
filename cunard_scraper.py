@@ -318,10 +318,23 @@ class CunardScraper:
                         await page.goto('https://myvoyage.cunard.com/pdfviewer', wait_until='networkidle')
                         await asyncio.sleep(3)
                 
+                # Debug: save page content
+                html = await page.content()
+                with open(self.download_dir / 'debug_page.html', 'w') as f:
+                    f.write(html)
+                await page.screenshot(path=str(self.download_dir / 'debug.png'))
+                logger.info(f"Saved debug screenshot and HTML to {self.download_dir}")
+                
+                # Debug: list all buttons
+                buttons = await page.query_selector_all('button')
+                logger.info(f"Found {len(buttons)} buttons on page:")
+                for i, btn in enumerate(buttons[:10]):
+                    text = await btn.inner_text()
+                    logger.info(f"  Button {i}: {text[:50]}")
+                
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
                     logger.error("Could not find PDF URL")
-                    await page.screenshot(path=str(self.download_dir / 'debug.png'))
                     return
                 
                 logger.info(f"Found PDF: {pdf_url}")
