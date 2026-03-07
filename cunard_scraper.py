@@ -289,13 +289,14 @@ class CunardScraper:
                 
                 if '/landing' in current_url or current_url == 'https://myvoyage.cunard.com/':
                     logger.info("On landing page, looking for Daily Programme button...")
-                    # Try to click Daily Programme button
+                    # Try to click Daily Programme button - look for the sidebar link
                     dp_selectors = [
-                        'button:has-text("Daily Programme")',
+                        'a[href="/dailyProgramme"]',
+                        'a[href*="dailyProgramme"]',
                         'a:has-text("Daily Programme")',
-                        'button:has-text("Daily programme")',
                         'a:has-text("Daily programme")',
-                        '[href*="dailyProgramme"]',
+                        'button:has-text("Daily Programme")',
+                        'button:has-text("Daily programme")',
                         '[href*="pdfviewer"]'
                     ]
                     clicked = False
