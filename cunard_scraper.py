@@ -283,6 +283,41 @@ class CunardScraper:
                     logger.error("Still on login page after all attempts")
                     return
                 
+                # Check if we're on landing page and need to click Daily Programme
+                current_url = page.url
+                logger.info(f"Current URL: {current_url}")
+                
+                if '/landing' in current_url or current_url == 'https://myvoyage.cunard.com/':
+                    logger.info("On landing page, looking for Daily Programme button...")
+                    # Try to click Daily Programme button
+                    dp_selectors = [
+                        'button:has-text("Daily Programme")',
+                        'a:has-text("Daily Programme")',
+                        'button:has-text("Daily programme")',
+                        'a:has-text("Daily programme")',
+                        '[href*="dailyProgramme"]',
+                        '[href*="pdfviewer"]'
+                    ]
+                    clicked = False
+                    for selector in dp_selectors:
+                        try:
+                            btn = await page.query_selector(selector)
+                            if btn:
+                                await btn.click()
+                                logger.info(f"Clicked Daily Programme button: {selector}")
+                                await page.wait_for_load_state('networkidle')
+                                await asyncio.sleep(3)
+                                clicked = True
+                                break
+                        except Exception as e:
+                            continue
+                    
+                    if not clicked:
+                        # Try navigating directly to pdfviewer
+                        logger.info("Button not found, navigating to pdfviewer directly...")
+                        await page.goto('https://myvoyage.cunard.com/pdfviewer', wait_until='networkidle')
+                        await asyncio.sleep(3)
+                
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
                     logger.error("Could not find PDF URL")
