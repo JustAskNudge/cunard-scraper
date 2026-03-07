@@ -374,6 +374,34 @@ class CunardScraper:
                     text = await link.inner_text()
                     logger.info(f"  Link {i}: {text[:30]} -> {href}")
                 
+                # Try to close any modal/dialog first
+                try:
+                    close_btn = await page.query_selector('button:has-text("Close")')
+                    if close_btn:
+                        await close_btn.click()
+                        logger.info("Clicked Close button on modal")
+                        await asyncio.sleep(2)
+                except Exception as e:
+                    logger.debug(f"No close button or error: {e}")
+                
+                # Check for PDF viewer iframe
+                iframes = await page.query_selector_all('iframe')
+                logger.info(f"Found {len(iframes)} iframes")
+                for i, iframe in enumerate(iframes):
+                    src = await iframe.get_attribute('src')
+                    logger.info(f"  Iframe {i}: {src}")
+                    if src and '.pdf' in src:
+                        return src
+                
+                # Check for embed/object
+                embeds = await page.query_selector_all('embed, object')
+                logger.info(f"Found {len(embeds)} embeds/objects")
+                for i, embed in enumerate(embeds):
+                    src = await embed.get_attribute('src') or await embed.get_attribute('data')
+                    logger.info(f"  Embed {i}: {src}")
+                    if src and '.pdf' in src:
+                        return src
+                
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
                     logger.error("Could not find PDF URL")
