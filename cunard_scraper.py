@@ -366,6 +366,14 @@ class CunardScraper:
                     text = await btn.inner_text()
                     logger.info(f"  Button {i}: {text[:50]}")
                 
+                # Debug: list all links
+                links = await page.query_selector_all('a[href]')
+                logger.info(f"Found {len(links)} links on page:")
+                for i, link in enumerate(links[:20]):
+                    href = await link.get_attribute('href')
+                    text = await link.inner_text()
+                    logger.info(f"  Link {i}: {text[:30]} -> {href}")
+                
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
                     logger.error("Could not find PDF URL")
