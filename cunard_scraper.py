@@ -402,6 +402,25 @@ class CunardScraper:
                     if src and '.pdf' in src:
                         return src
                 
+                # Look for mobile PDF container header
+                pdf_header = await page.query_selector('.mobile__pdf__container__header')
+                if pdf_header:
+                    header_text = await pdf_header.inner_text()
+                    logger.info(f"Found PDF header: {header_text}")
+                    # Try to find PDF URL in page source
+                    html = await page.content()
+                    # Look for PDF URLs in the HTML
+                    import re
+                    pdf_matches = re.findall(r'https?://[^\s"\'<>]+\.pdf', html)
+                    if pdf_matches:
+                        logger.info(f"Found PDF URLs in HTML: {pdf_matches}")
+                        return pdf_matches[0]
+                    # Try to construct URL from header text
+                    # The PDF might be at a known endpoint
+                    pdf_url = f"https://myvoyage.cunard.com/pdfviewer"
+                    logger.info(f"Trying pdfviewer endpoint: {pdf_url}")
+                    return pdf_url
+                
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
                     logger.error("Could not find PDF URL")
