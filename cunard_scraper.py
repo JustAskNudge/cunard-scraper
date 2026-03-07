@@ -96,8 +96,25 @@ class CunardScraper:
             await page.fill('input[placeholder*="last" i]', self.config['cunard_last_name'])
             selects = await page.query_selector_all('select')
             if len(selects) >= 3:
+                # Day
                 await selects[0].select_option(self.config['cunard_dob_day'])
-                await selects[1].select_option(self.config['cunard_dob_month'])
+                # Month - try both numeric and name formats
+                month_num = self.config['cunard_dob_month']
+                month_names = {
+                    '1': 'January', '2': 'February', '3': 'March', '4': 'April',
+                    '5': 'May', '6': 'June', '7': 'July', '8': 'August',
+                    '9': 'September', '10': 'October', '11': 'November', '12': 'December'
+                }
+                month_name = month_names.get(month_num, month_num)
+                try:
+                    await selects[1].select_option(month_num)
+                except:
+                    try:
+                        await selects[1].select_option(month_name)
+                    except:
+                        # Try by label
+                        await selects[1].select_option(label=month_name)
+                # Year
                 await selects[2].select_option(self.config['cunard_dob_year'])
             await page.click('button:has-text("OK"), button[type="submit"]')
             await page.wait_for_load_state('networkidle')
