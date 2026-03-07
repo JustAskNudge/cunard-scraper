@@ -407,19 +407,56 @@ class CunardScraper:
                 if pdf_header:
                     header_text = await pdf_header.inner_text()
                     logger.info(f"Found PDF header: {header_text}")
+                    
                     # Try to find PDF URL in page source
                     html = await page.content()
+                    
                     # Look for PDF URLs in the HTML
                     import re
                     pdf_matches = re.findall(r'https?://[^\s"\'<>]+\.pdf', html)
                     if pdf_matches:
                         logger.info(f"Found PDF URLs in HTML: {pdf_matches}")
                         return pdf_matches[0]
-                    # Try to construct URL from header text
-                    # The PDF might be at a known endpoint
-                    pdf_url = f"https://myvoyage.cunard.com/pdfviewer"
-                    logger.info(f"Trying pdfviewer endpoint: {pdf_url}")
-                    return pdf_url
+                    
+                    # Try to find PDF reference in JavaScript variables or data attributes
+                    # Look for common patterns in React apps
+                    js_pdf_matches = re.findall(r'"([^"]*\.pdf)"', html)
+                    if js_pdf_matches:
+                        logger.info(f"Found potential PDF refs in JS: {js_pdf_matches}")
+                        for match in js_pdf_matches:
+                            if match.startswith('http'):
+                                return match
+                            elif match.startswith('/'):
+                                return f"https://myvoyage.cunard.com{match}"
+                    
+                    # Try API endpoints that might return the PDF
+                    # Common patterns for ship daily programmes
+                    today = datetime.now()
+                    date_str = today.strftime("%Y-%m-%d")
+                    potential_urls = [
+                        f"https://myvoyage.cunard.com/api/dailyProgramme/pdf",
+                        f"https://myvoyage.cunard.com/api/pdf/daily",
+                        f"https://ship-cms.cunard.com/content/dailyprogramme/{date_str}.pdf",
+                        f"https://myvoyage.cunard.com/pdfviewer",
+                    ]
+                    
+                    for url in potential_urls:
+                        logger.info(f"Trying potential URL: {url}")
+                        try:
+                            # Try to fetch the URL
+                            response = await context.new_page()
+                            resp = await response.goto(url, wait_until='networkidle', timeout=10000)
+                            content_type = resp.headers.get('content-type', '')
+                            if 'pdf' in content_type.lower():
+                                logger.info(f"Found PDF at: {url}")
+                                return url
+                            await response.close()
+                        except Exception as e:
+                            logger.debug(f"URL {url} failed: {e}")
+                            continue
+                    
+                    logger.warning("Could not find PDF URL through any method")
+                    return None
                 
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
