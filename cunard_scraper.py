@@ -256,13 +256,26 @@ class CunardScraper:
                 await page.goto('https://myvoyage.cunard.com/pdfviewer', wait_until='networkidle')
                 await asyncio.sleep(3)
                 
-                if await self._check_login_required(page):
-                    logger.info("Login required")
-                    if not await self._perform_login(page):
+                login_attempts = 0
+                while await self._check_login_required(page) and login_attempts < 2:
+                    login_attempts += 1
+                    logger.info(f"Login required (attempt {login_attempts})")
+                    if login_attempts == 1:
+                        # Try automated login first
+                        if await self._perform_login(page):
+                            logger.info("Automated login succeeded")
+                            break
                         logger.warning("Automated login failed, switching to manual")
-                        if not await self._manual_login(page, context):
-                            logger.error("Manual login failed")
-                            return
+                    # Fall back to manual login
+                    if await self._manual_login(page, context):
+                        logger.info("Manual login completed")
+                        break
+                    logger.error("Manual login failed")
+                    return
+                
+                if await self._check_login_required(page):
+                    logger.error("Still on login page after all attempts")
+                    return
                 
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
