@@ -10,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from typing import List, Optional
 
@@ -459,7 +459,8 @@ class CunardScraper:
             logger.error(f"Invalid date format: {date_str}")
             return
         
-        now = datetime.now()
+        ship_tz = timezone(timedelta(hours=10))
+        now = datetime.now(ship_tz)
 
         # Exclusions filter (case insensitive)
         exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing", "jazz"]
@@ -495,8 +496,9 @@ class CunardScraper:
                 elif is_am and hour == 12:
                     hour = 0
                 
-                # Create datetime for the event (using PDF date, local timezone)
+                # Create datetime for the event (using PDF date, ship timezone)
                 event_datetime = datetime.combine(pdf_date, datetime.min.time().replace(hour=hour, minute=minute))
+                event_datetime = event_datetime.replace(tzinfo=ship_tz)
                 
                 # Skip if event is in the past
                 if event_datetime < now:
