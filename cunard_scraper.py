@@ -10,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from typing import List, Optional
 
@@ -203,6 +203,35 @@ class CunardScraper:
         self._save_json(self.storage_state_file, storage)
         logger.info("Session saved for future runs!")
         return True
+    
+    def _extract_date_from_pdf_url(self, pdf_url: str) -> Optional[str]:
+        """Extract date from PDF URL query parameters.
+        
+        Cunard PDF URLs typically contain ?date=YYYY-MM-DD
+        Returns the date string or None if not found.
+        """
+        try:
+            parsed = urlparse(pdf_url)
+            query_params = parse_qs(parsed.query)
+            
+            # Look for 'date' parameter
+            if 'date' in query_params:
+                date_str = query_params['date'][0]
+                # Validate format (YYYY-MM-DD)
+                datetime.strptime(date_str, "%Y-%m-%d")
+                return date_str
+            
+            # Try to extract date from URL path (e.g., /dailyprogramme/2026-03-11.pdf)
+            path_date_match = re.search(r'(\d{4}-\d{2}-\d{2})', parsed.path)
+            if path_date_match:
+                date_str = path_date_match.group(1)
+                datetime.strptime(date_str, "%Y-%m-%d")
+                return date_str
+                
+        except (ValueError, IndexError) as e:
+            logger.debug(f"Could not extract date from PDF URL: {e}")
+        
+        return None
     
     async def _extract_pdf_url(self, page: Page) -> Optional[str]:
         logger.info("Looking for PDF URL...")
@@ -398,41 +427,86 @@ class CunardScraper:
         return events
     
     def _schedule_reminders(self, events: List[Event], date_str: str):
-        logger.info(f"Scheduling reminders for {len(events)} events")
+        """Schedule reminders for events, filtering out past events.
+        
+        Args:
+            events: List of Event objects
+            date_str: Date string in YYYY-MM-DD format (from PDF)
+        """
+        logger.info(f"Scheduling reminders for {len(events)} events on {date_str}")
+        
+        # Parse the PDF date and get current local time
+        try:
+            pdf_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            logger.error(f"Invalid date format: {date_str}")
+            return
+        
+        now = datetime.now()
+        current_date = now.date()
+        
+        scheduled_count = 0
+        skipped_count = 0
+        
         for event in events:
             try:
                 hour, minute = map(int, event.time.split(':'))
-                reminder_min = minute - 15
-                reminder_hour = hour
-                if reminder_min < 0:
-                    reminder_min += 60
-                    reminder_hour -= 1
-                    if reminder_hour < 0:
-                        reminder_hour = 23
+                
+                # Create datetime for the event (using PDF date, local timezone)
+                event_datetime = datetime.combine(pdf_date, datetime.min.time().replace(hour=hour, minute=minute))
+                
+                # Calculate reminder time (15 mins before)
+                reminder_datetime = event_datetime - timedelta(minutes=15)
+                
+                # Skip if reminder time is in the past
+                if reminder_datetime < now:
+                    logger.info(f"Skipping past event: {event.title} at {event.time}")
+                    skipped_count += 1
+                    continue
+                
+                # Build cron expression for specific date
+                reminder_min = reminder_datetime.minute
+                reminder_hour = reminder_datetime.hour
+                reminder_day = reminder_datetime.day
+                reminder_month = reminder_datetime.month
+                
                 emoji = "⭐" if event.is_gala else "🚢"
                 if event.category == 'Bingo':
                     emoji = "🎱"
                 elif event.category == 'Theatre':
                     emoji = "🎭"
+                
                 reminder_text = f"{emoji} Starting in 15 mins: {event.title}\n🕐 {event.time}"
                 safe_title = re.sub(r'[^\w]', '_', event.title[:20])
                 job_name = f"cunard_{date_str}_{safe_title}"
-                cron_expr = f"{reminder_min} {reminder_hour} * * *"
+                
+                # Cron for specific date: min hour day month *
+                cron_expr = f"{reminder_min} {reminder_hour} {reminder_day} {reminder_month} *"
+                
                 cmd = [
                     'openclaw', 'message', 'send',
                     '--target', self.config['telegram_chat_id'],
                     '--channel', 'telegram',
                     '--message', reminder_text
                 ]
-                subprocess.run([
+                
+                result = subprocess.run([
                     'openclaw', 'cron', 'add',
                     '--name', job_name,
                     '--schedule', cron_expr,
                     '--command', ' '.join(cmd)
-                ], capture_output=True)
-                logger.info(f"Scheduled reminder for {event.time} - {event.title[:40]}")
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    logger.info(f"Scheduled reminder for {event.time} - {event.title[:40]} (runs once on {reminder_datetime.strftime('%Y-%m-%d %H:%M')})")
+                    scheduled_count += 1
+                else:
+                    logger.error(f"Failed to schedule reminder: {result.stderr}")
+                    
             except Exception as e:
                 logger.error(f"Error scheduling reminder: {e}")
+        
+        logger.info(f"Reminder scheduling complete: {scheduled_count} scheduled, {skipped_count} skipped (past events)")
     
     async def _send_pdf_to_telegram(self, filename: str, content: bytes):
         logger.info(f"Sending PDF to Telegram: {filename}")
@@ -660,13 +734,20 @@ class CunardScraper:
                     logger.error("Failed to download PDF")
                     return
                 
-                today = datetime.now().strftime("%Y-%m-%d")
+                # Extract date from PDF URL (e.g., ?date=2026-03-11) or use current date as fallback
+                pdf_date_str = self._extract_date_from_pdf_url(pdf_url)
+                if not pdf_date_str:
+                    pdf_date_str = datetime.now().strftime("%Y-%m-%d")
+                    logger.warning(f"Could not extract date from PDF URL, using today: {pdf_date_str}")
+                else:
+                    logger.info(f"Extracted date from PDF URL: {pdf_date_str}")
+                
                 pdf_hash = self._get_pdf_hash(content)
                 if pdf_hash in self.state['sent_pdfs']:
                     logger.info("PDF already processed today")
                     return
                 
-                filename = f"daily-programme-{today}.pdf"
+                filename = f"daily-programme-{pdf_date_str}.pdf"
                 pdf_path = self.download_dir / filename
                 with open(pdf_path, 'wb') as f:
                     f.write(content)
@@ -675,17 +756,17 @@ class CunardScraper:
                 
                 events = self._extract_events_from_pdf(pdf_path)
                 if events:
-                    self._schedule_reminders(events, today)
-                    self._save_json(self.download_dir / f'events_{today}.json', 
-                                   {'date': today, 'events': [e.__dict__ for e in events]})
+                    self._schedule_reminders(events, pdf_date_str)
+                    self._save_json(self.download_dir / f'events_{pdf_date_str}.json', 
+                                   {'date': pdf_date_str, 'events': [e.__dict__ for e in events]})
                 
                 self.state['sent_pdfs'][pdf_hash] = {
                     'filename': filename,
-                    'date': today,
+                    'date': pdf_date_str,
                     'url': pdf_url
                 }
                 self._save_json(self.state_file, self.state)
-                logger.info(f"Successfully processed daily programme for {today}")
+                logger.info(f"Successfully processed daily programme for {pdf_date_str}")
                 
             finally:
                 await browser.close()
