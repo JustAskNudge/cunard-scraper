@@ -5,10 +5,11 @@ import json
 import hashlib
 import logging
 import asyncio
+import base64
 import re
 import subprocess
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import List, Optional
@@ -98,28 +99,92 @@ class CunardScraper:
             if len(selects) >= 3:
                 # Day
                 await selects[0].select_option(self.config['cunard_dob_day'])
-                # Month - try both numeric and name formats
-                month_num = self.config['cunard_dob_month']
+                # Month - handle both 1-based (1-12) and 0-based (0-11) dropdown values.
+                month_num = str(self.config['cunard_dob_month']).strip()
                 month_names = {
                     '1': 'January', '2': 'February', '3': 'March', '4': 'April',
                     '5': 'May', '6': 'June', '7': 'July', '8': 'August',
                     '9': 'September', '10': 'October', '11': 'November', '12': 'December'
                 }
                 month_name = month_names.get(month_num, month_num)
-                try:
-                    await selects[1].select_option(month_num)
-                except:
+                month_candidates = []
+                option_values = await selects[1].evaluate(
+                    "el => Array.from(el.options).map(o => String(o.value || '').trim())"
+                )
+
+                if month_num.isdigit():
+                    month_int = int(month_num)
+                    if "0" in option_values and "11" in option_values and 1 <= month_int <= 12:
+                        # Cunard uses 0-based month values: Jan=0 ... Oct=9 ... Dec=11.
+                        month_candidates.append(str(month_int - 1))
+                    month_candidates.append(month_num)
+
+                for candidate in month_candidates:
+                    if candidate in option_values:
+                        await selects[1].select_option(value=candidate)
+                        logger.info("Selected DOB month via value=%s", candidate)
+                        break
+                else:
                     try:
-                        await selects[1].select_option(month_name)
-                    except:
-                        # Try by label
                         await selects[1].select_option(label=month_name)
+                        logger.info("Selected DOB month via label=%s", month_name)
+                    except Exception:
+                        # Last fallback: previous behavior.
+                        await selects[1].select_option(month_num)
+                        logger.info("Selected DOB month via fallback=%s", month_num)
                 # Year
                 await selects[2].select_option(self.config['cunard_dob_year'])
-            await page.click('button:has-text("OK"), button[type="submit"]')
-            await page.wait_for_load_state('networkidle')
-            await asyncio.sleep(3)
-            return not await self._check_login_required(page)
+            submitted = False
+            submit_selectors = [
+                'button:has-text("OK")',
+                'button:has-text("Login")',
+                'button:has-text("Log in")',
+                '#webapp-login-form button[type="submit"]',
+                'form button[type="submit"]',
+                'button[type="submit"]',
+                'input[type="submit"]',
+            ]
+            for selector in submit_selectors:
+                try:
+                    button = page.locator(selector).first
+                    if await button.count() > 0:
+                        await button.click(timeout=3000)
+                        logger.info("Submitted login using selector: %s", selector)
+                        submitted = True
+                        break
+                except Exception:
+                    continue
+
+            if not submitted:
+                try:
+                    await page.evaluate(
+                        """() => {
+                            const form = document.querySelector('#webapp-login-form') || document.querySelector('form');
+                            if (!form) return false;
+                            if (typeof form.requestSubmit === 'function') {
+                                form.requestSubmit();
+                            } else {
+                                form.submit();
+                            }
+                            return true;
+                        }"""
+                    )
+                    logger.info("Submitted login via form requestSubmit() fallback")
+                    submitted = True
+                except Exception:
+                    pass
+
+            if not submitted:
+                await page.keyboard.press("Enter")
+                logger.info("Submitted login via Enter key fallback")
+
+            # The login form is SPA-driven; avoid relying only on navigation events.
+            for _ in range(12):
+                if not await self._check_login_required(page):
+                    return True
+                await asyncio.sleep(1)
+
+            return False
         except Exception as e:
             logger.error(f"Automated login failed: {e}")
             return False
@@ -141,39 +206,166 @@ class CunardScraper:
     
     async def _extract_pdf_url(self, page: Page) -> Optional[str]:
         logger.info("Looking for PDF URL...")
-        await asyncio.sleep(5)
-        links = await page.query_selector_all('a[href*=".pdf"]')
-        for link in links:
-            href = await link.get_attribute('href')
-            if href:
-                return urljoin('https://myvoyage.cunard.com', href)
-        for selector in ['iframe[src*=".pdf"]', 'embed[src*=".pdf"]', 'object[data*=".pdf"]']:
-            elem = await page.query_selector(selector)
-            if elem:
-                src = await elem.get_attribute('src') or await elem.get_attribute('data')
-                if src:
-                    return urljoin('https://myvoyage.cunard.com', src)
-        html = await page.content()
-        pdf_urls = re.findall(r'https?://[^\s\"\'<>]+\.pdf', html)
-        if pdf_urls:
-            return pdf_urls[0]
+
+        def looks_like_pdf_url(candidate_url: str, content_type: str = "") -> bool:
+            lower_url = (candidate_url or "").lower()
+            lower_content_type = (content_type or "").lower()
+            return (
+                ".pdf" in lower_url
+                or "getdailyprogrampdf" in lower_url
+                or "application/pdf" in lower_content_type
+            )
+
+        found_urls = []
+
+        def handle_response(response) -> None:
+            try:
+                headers = getattr(response, "headers", {}) or {}
+                content_type = headers.get("content-type") or headers.get("Content-Type") or ""
+                status = getattr(response, "status", None)
+                resp_url = getattr(response, "url", "")
+                if status == 200 and looks_like_pdf_url(resp_url, content_type):
+                    normalized = urljoin(page.url, resp_url)
+                    if normalized not in found_urls:
+                        found_urls.append(normalized)
+                        logger.info("Captured PDF URL from network: %s", normalized)
+            except Exception as exc:
+                logger.debug("Failed to inspect response: %s", exc)
+
+        page.on("response", handle_response)
+        try:
+            try:
+                await page.wait_for_selector(".mobile__pdf__container", timeout=5000)
+            except Exception:
+                logger.debug("PDF container selector not found yet")
+
+            js_probe = """() => {
+                const urls = new Set();
+                const push = (value) => {
+                    if (!value || typeof value !== 'string') return;
+                    const trimmed = value.trim();
+                    if (!trimmed) return;
+                    const lower = trimmed.toLowerCase();
+                    if (lower.includes('.pdf') || lower.includes('getdailyprogrampdf')) urls.add(trimmed);
+                };
+
+                for (const entry of performance.getEntriesByType('resource')) push(entry.name);
+
+                for (const key of ['pdfUrl', 'dailyProgrammePdf', 'dailyProgramPdf', 'programmePdfUrl']) {
+                    push(window[key]);
+                }
+
+                const viewer = document.querySelector('.mobile__pdf__container');
+                if (viewer) {
+                    const reactKey = Object.keys(viewer).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$'));
+                    if (reactKey) {
+                        const node = viewer[reactKey];
+                        push(node?.memoizedProps?.pdfUrl);
+                        push(node?.return?.memoizedProps?.pdfUrl);
+                        push(node?.memoizedProps?.src);
+                        push(node?.return?.memoizedProps?.src);
+                    }
+                }
+
+                for (const script of document.querySelectorAll('script')) {
+                    const txt = script.textContent || '';
+                    const matches = txt.match(/https?:\\/\\/[^"'\\s]+(?:\\.pdf|getDailyProgramPdf[^"'\\s]*)/gi) || [];
+                    for (const m of matches) push(m);
+                }
+
+                return Array.from(urls);
+            }"""
+
+            timeout_seconds = float(self.config.get('pdf_capture_timeout_seconds', 12.0))
+            poll_seconds = float(self.config.get('pdf_capture_poll_interval_seconds', 0.5))
+            poll_count = max(1, int(timeout_seconds / max(poll_seconds, 0.05)))
+
+            for _ in range(poll_count):
+                if found_urls:
+                    return found_urls[0]
+
+                js_urls = await page.evaluate(js_probe)
+                if js_urls:
+                    for js_url in js_urls:
+                        if looks_like_pdf_url(js_url):
+                            normalized = urljoin(page.url, js_url)
+                            logger.info("Found PDF URL via JavaScript probe: %s", normalized)
+                            return normalized
+
+                await asyncio.sleep(poll_seconds)
+        finally:
+            try:
+                page.remove_listener("response", handle_response)
+            except Exception:
+                pass
+
+        if found_urls:
+            return found_urls[0]
+
+        parsed = urlparse(page.url)
+        query = parse_qs(parsed.query)
+        cruise_id = query.get("cruiseId", [None])[0] or query.get("cruiseid", [None])[0]
+        program_date = query.get("date", [None])[0] or datetime.now().strftime("%Y-%m-%d")
+
+        if cruise_id and program_date:
+            base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://myvoyage.cunard.com"
+            fallback = f"{base_url}/dailyprogram/getDailyProgramPdf?{urlencode({'cruiseId': cruise_id, 'date': program_date})}"
+            logger.info("Constructed fallback PDF URL: %s", fallback)
+            return fallback
+
+        logger.warning("Unable to determine PDF URL from network, JavaScript, or fallback construction")
         return None
     
     async def _download_pdf(self, context: BrowserContext, url: str) -> Optional[bytes]:
-        logger.info(f"Downloading PDF from {url}")
-        page = await context.new_page()
+        logger.info("Downloading PDF from %s", url)
+
+        pdf_bytes = None
         try:
-            response = await page.goto(url, wait_until='networkidle')
-            content = await response.body()
-            await page.close()
-            if len(content) > 1000 and content[:4] == b'%PDF':
-                return content
-            logger.warning(f"Downloaded content is not a valid PDF")
+            response = await context.request.get(url, timeout=30000)
+            if response.ok:
+                pdf_bytes = await response.body()
+                logger.info("Downloaded %s bytes via context.request", len(pdf_bytes))
+            else:
+                logger.warning("context.request download failed with status %s for %s", response.status, url)
+        except Exception as exc:
+            logger.warning("context.request download raised %s", exc)
+
+        if not pdf_bytes:
+            page = await context.new_page()
+            try:
+                data_url = await page.evaluate(
+                    """async (pdfUrl) => {
+                        const response = await fetch(pdfUrl, { credentials: 'include' });
+                        if (!response.ok) return null;
+                        const buffer = await response.arrayBuffer();
+                        let binary = '';
+                        const bytes = new Uint8Array(buffer);
+                        const chunkSize = 0x8000;
+                        for (let i = 0; i < bytes.length; i += chunkSize) {
+                            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                        }
+                        return 'data:application/pdf;base64,' + btoa(binary);
+                    }""",
+                    url,
+                )
+                if data_url and "," in data_url:
+                    _, encoded = data_url.split(",", 1)
+                    pdf_bytes = base64.b64decode(encoded)
+                    logger.info("Downloaded %s bytes via browser fetch fallback", len(pdf_bytes))
+            except Exception as exc:
+                logger.error("Browser fetch fallback failed: %s", exc)
+            finally:
+                await page.close()
+
+        if not pdf_bytes:
+            logger.error("Failed to download PDF bytes from %s", url)
             return None
-        except Exception as e:
-            logger.error(f"Error downloading PDF: {e}")
-            await page.close()
+
+        if b"%PDF" not in pdf_bytes[:1024]:
+            logger.error("Downloaded bytes do not appear to be a PDF")
             return None
+
+        return pdf_bytes
     
     def _extract_events_from_pdf(self, pdf_path: Path) -> List[Event]:
         logger.info(f"Extracting events from {pdf_path}")
@@ -455,8 +647,7 @@ class CunardScraper:
                             logger.debug(f"URL {url} failed: {e}")
                             continue
                     
-                    logger.warning("Could not find PDF URL through any method")
-                    return None
+                    logger.warning("Could not find PDF URL through direct URL probing; using extractor fallback")
                 
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
