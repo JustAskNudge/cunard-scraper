@@ -491,6 +491,11 @@ class CunardScraper:
                         'second sitting',
                         'dress code',
                         'tonight:',
+                        'this evening, we ask that you wear',
+                        'by dialling',
+                        'dialling',
+                        'late',
+                        'venue not listed',
                     ]
                     if (
                         not title
@@ -511,6 +516,10 @@ class CunardScraper:
                     title_semantic = re.sub(r'\b(?:am|pm|to|and)\b', ' ', title_no_times, flags=re.IGNORECASE)
                     title_semantic = re.sub(r'[^a-z]+', ' ', title_semantic).strip()
                     if len(title_semantic) < 3:
+                        continue
+
+                    # If title still begins with another time token, it's usually a schedule range fragment.
+                    if re.match(r'^\d{1,2}\.\d{2}\s*(?:[ap]\.?\s*m\.?)?', title_lower, flags=re.IGNORECASE):
                         continue
                     
                     # Skip excluded events
