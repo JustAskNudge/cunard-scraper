@@ -439,10 +439,16 @@ class CunardScraper:
                 text += page.extract_text() + "\n"
             lines = text.split('\n')
             for line in lines:
-                time_match = re.search(r'(\d{1,2})\.(\d{2})', line)
+                # Capture times like 6.00pm, 6.00 pm, 6.00a.m. and keep meridiem with the time.
+                time_match = re.search(r'(\d{1,2})\.(\d{2})(?:\s*([ap])\.?\s*m\.?)?', line, re.IGNORECASE)
                 if time_match:
-                    time_str = time_match.group(0)
+                    hour_str = time_match.group(1)
+                    minute_str = time_match.group(2)
+                    meridiem = (time_match.group(3) or "").lower()
+                    time_str = f"{int(hour_str)}.{minute_str}{meridiem + 'm' if meridiem else ''}"
                     rest = line[time_match.end():].strip()
+                    # If the extractor separated "am/pm" from time, consume it from the title prefix.
+                    rest = re.sub(r'^(?:[ap])\.?\s*m\.?\b\s*', '', rest, flags=re.IGNORECASE)
                     # Parse title and venue from rest: "11.00am Event Name – Venue"
                     # Split on en-dash '–' to separate title from venue
                     if '–' in rest:
@@ -702,7 +708,7 @@ end tell
                 
                 # Try to close any modal/dialog first
                 try:
-                    close_btn = await page.query_selector('button:has-text("Close")')
+                    close_btn = await page.query_selector('button:has-text("Close")', timeout=750)
                     if close_btn:
                         await close_btn.click()
                         logger.info("Clicked Close button on modal")
