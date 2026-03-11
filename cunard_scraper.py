@@ -396,9 +396,9 @@ class CunardScraper:
     def _extract_events_from_pdf(self, pdf_path: Path) -> List[Event]:
         logger.info(f"Extracting events from {pdf_path}")
         events = []
-        
+
         # Exclusions filter (case insensitive)
-        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing"]
+        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing", "jazz"]
         
         try:
             reader = PdfReader(str(pdf_path))
@@ -460,10 +460,10 @@ class CunardScraper:
             return
         
         now = datetime.now()
-        
+
         # Exclusions filter (case insensitive)
-        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing"]
-        
+        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing", "jazz"]
+
         scheduled_count = 0
         skipped_count = 0
         excluded_count = 0
@@ -522,13 +522,11 @@ class CunardScraper:
                 # AppleScript to create reminder with 15-minute alert
                 # Format date for AppleScript: YYYY-MM-DD HH:MM:SS
                 due_date_str = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
-                
+
                 applescript = f'''
 tell application "Reminders"
     tell list "Ship Reminders"
-        set newReminder to make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:date "{due_date_str}"}}
-        -- Set 15-minute alert before due date
-        set allday of newReminder to false
+        make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:date "{due_date_str}"}}
     end tell
 end tell
 '''
