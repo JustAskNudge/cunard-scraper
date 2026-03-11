@@ -87,6 +87,20 @@ class CunardScraper:
             with open(path) as f:
                 return json.load(f)
         return default
+
+    def _is_excluded_title(self, title: str) -> bool:
+        normalized = re.sub(r'\s+', ' ', (title or '').lower()).strip()
+        patterns = [
+            r'\bline\s+dancing\b',
+            r'\bjewel+l?ery\b',
+            r'\bballroom\s+dancing\b',
+            r'\bjazz\b',
+            r'\bpianist\b',
+            r'\bharpist\b',
+            r'\bsolo\s+travellers?\b',
+            r'\bcarat\b',
+        ]
+        return any(re.search(pattern, normalized) for pattern in patterns)
     
     def _save_json(self, path: Path, data: dict):
         with open(path, 'w') as f:
@@ -429,19 +443,6 @@ class CunardScraper:
         logger.info(f"Extracting events from {pdf_path}")
         events = []
 
-        # Exclusions filter (case insensitive)
-        exclusions = [
-            "line dancing",
-            "jewelry",
-            "jewellery",
-            "ballroom dancing",
-            "jazz",
-            "pianist",
-            "harpist",
-            "solo travellers",
-            "carat",
-        ]
-        
         try:
             reader = PdfReader(str(pdf_path))
             text = ""
@@ -523,7 +524,7 @@ class CunardScraper:
                         continue
                     
                     # Skip excluded events
-                    if any(excl in title_lower for excl in exclusions):
+                    if self._is_excluded_title(title):
                         logger.debug(f"Excluding event: {title}")
                         continue
                     
@@ -563,19 +564,6 @@ class CunardScraper:
         ship_tz = timezone(timedelta(hours=10))
         now = datetime.now(ship_tz)
 
-        # Exclusions filter (case insensitive)
-        exclusions = [
-            "line dancing",
-            "jewelry",
-            "jewellery",
-            "ballroom dancing",
-            "jazz",
-            "pianist",
-            "harpist",
-            "solo travellers",
-            "carat",
-        ]
-
         scheduled_count = 0
         skipped_count = 0
         excluded_count = 0
@@ -584,8 +572,7 @@ class CunardScraper:
         for event in events:
             try:
                 # Skip excluded events
-                title_lower = event.title.lower()
-                if any(excl in title_lower for excl in exclusions):
+                if self._is_excluded_title(event.title):
                     logger.info(f"Skipping excluded event: {event.title}")
                     excluded_count += 1
                     continue
