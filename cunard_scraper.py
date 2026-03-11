@@ -477,7 +477,23 @@ class CunardScraper:
                     excluded_count += 1
                     continue
                 
-                hour, minute = map(int, event.time.split(':'))
+                # Handle both colon and dot formats, and strip am/pm
+                time_clean = event.time.lower().replace('am', '').replace('pm', '')
+                is_pm = 'pm' in event.time.lower()
+                is_am = 'am' in event.time.lower()
+                
+                if ':' in time_clean:
+                    hour, minute = map(int, time_clean.split(':'))
+                elif '.' in time_clean:
+                    hour, minute = map(int, time_clean.split('.'))
+                else:
+                    raise ValueError(f"Cannot parse time: {event.time}")
+                
+                # Convert 12-hour to 24-hour format
+                if is_pm and hour != 12:
+                    hour += 12
+                elif is_am and hour == 12:
+                    hour = 0
                 
                 # Create datetime for the event (using PDF date, local timezone)
                 event_datetime = datetime.combine(pdf_date, datetime.min.time().replace(hour=hour, minute=minute))
