@@ -439,14 +439,18 @@ class CunardScraper:
                 text += page.extract_text() + "\n"
             lines = text.split('\n')
             for line in lines:
-                # Capture times like 6.00pm, 6.00 pm, 6.00a.m. and keep meridiem with the time.
-                time_match = re.search(r'(\d{1,2})\.(\d{2})(?:\s*([ap])\.?\s*m\.?)?', line, re.IGNORECASE)
-                if time_match:
-                    hour_str = time_match.group(1)
-                    minute_str = time_match.group(2)
-                    meridiem = (time_match.group(3) or "").lower()
-                    time_str = f"{int(hour_str)}.{minute_str}{meridiem + 'm' if meridiem else ''}"
-                    rest = line[time_match.end():].strip()
+                # Capture times like 6.00pm, 6.00 pm, 6.00a.m.; if a line has multiple times, create one event per time.
+                time_matches = list(re.finditer(r'(\d{1,2})\.(\d{2})(?:\s*([ap])\.?\s*m\.?)?', line, re.IGNORECASE))
+                if time_matches:
+                    times = []
+                    for time_match in time_matches:
+                        hour_str = time_match.group(1)
+                        minute_str = time_match.group(2)
+                        meridiem = (time_match.group(3) or "").lower()
+                        times.append(f"{int(hour_str)}.{minute_str}{meridiem + 'm' if meridiem else ''}")
+
+                    # Keep existing title extraction behavior based on text after first time token.
+                    rest = line[time_matches[0].end():].strip()
                     # If the extractor separated "am/pm" from time, consume it from the title prefix.
                     rest = re.sub(r'^(?:[ap])\.?\s*m\.?\b\s*', '', rest, flags=re.IGNORECASE)
                     # Parse title and venue from rest: "11.00am Event Name – Venue"
@@ -475,7 +479,8 @@ class CunardScraper:
                         category = 'Theatre'
                     elif 'planetarium' in line.lower():
                         category = 'Planetarium'
-                    events.append(Event(time=time_str, title=title, venue=venue, category=category, is_gala=is_gala))
+                    for time_str in times:
+                        events.append(Event(time=time_str, title=title, venue=venue, category=category, is_gala=is_gala))
         except Exception as e:
             logger.error(f"Error extracting events: {e}")
         logger.info(f"Extracted {len(events)} events")
