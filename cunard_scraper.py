@@ -538,6 +538,7 @@ class CunardScraper:
         scheduled_count = 0
         skipped_count = 0
         excluded_count = 0
+        invalid_count = 0
         
         for event in events:
             try:
@@ -582,23 +583,37 @@ class CunardScraper:
                     emoji = "🎱"
                 elif event.category == 'Theatre':
                     emoji = "🎭"
-                
-                reminder_title = f"{emoji} {event.title}"
-                reminder_notes = f"🕐 {event.time}\n📍 {event.venue}\n📅 {date_str}"
-                
-                # Calculate alarm time (15 mins before event)
-                alarm_datetime = event_datetime - timedelta(minutes=15)
-                alarm_date_str = alarm_datetime.strftime("%Y-%m-%d")
-                alarm_time_str = alarm_datetime.strftime("%H:%M:%S")
-                
-                # AppleScript to create reminder with 15-minute alert
-                # Format date for AppleScript: YYYY-MM-DD HH:MM:SS
-                due_date_str = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+                clean_title = re.sub(r'\s+', ' ', event.title).strip(" -–,\t")
+                clean_venue = re.sub(r'\s+', ' ', event.venue or "").strip(" -–,\t")
+                if not clean_title:
+                    invalid_count += 1
+                    logger.debug(f"Skipping invalid event (empty title) at {event.time}")
+                    continue
+                if not clean_venue:
+                    clean_venue = "Venue not listed in programme"
+
+                reminder_title = f"{emoji} {clean_title}"
+                reminder_notes = f"🕐 {event.time}\n📍 {clean_venue}\n📅 {date_str}"
+                reminder_title = reminder_title.replace('"', '\\"')
+                reminder_notes = reminder_notes.replace('"', '\\"')
+
+                due_year = event_datetime.year
+                due_month = event_datetime.month
+                due_day = event_datetime.day
+                due_hour = event_datetime.hour
+                due_minute = event_datetime.minute
+                due_second = event_datetime.second
 
                 applescript = f'''
 tell application "Reminders"
     tell list "Ship Reminders"
-        make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:date "{due_date_str}"}}
+        set dueDate to (current date)
+        set year of dueDate to {due_year}
+        set month of dueDate to {due_month}
+        set day of dueDate to {due_day}
+        set time of dueDate to (({due_hour} * hours) + ({due_minute} * minutes) + {due_second})
+        make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:dueDate}}
     end tell
 end tell
 '''
@@ -619,7 +634,7 @@ end tell
             except Exception as e:
                 logger.error(f"Error scheduling reminder: {e}")
         
-        logger.info(f"Reminder scheduling complete: {scheduled_count} created, {skipped_count} skipped (past), {excluded_count} excluded")
+        logger.info(f"Reminder scheduling complete: {scheduled_count} created, {skipped_count} skipped (past), {excluded_count} excluded, {invalid_count} invalid")
     
 
     
