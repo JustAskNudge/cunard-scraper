@@ -8,6 +8,9 @@ import asyncio
 import base64
 import re
 import subprocess
+import socket
+import platform
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from datetime import datetime, timedelta, timezone
@@ -37,12 +40,30 @@ class Event:
 
 class CunardScraper:
     def __init__(self, config_path: str = "config.json"):
+        self.config_path = Path(config_path).expanduser().resolve()
         self.config = self._load_config(config_path)
         self.download_dir = Path(self.config.get('download_dir', 'downloads'))
         self.download_dir.mkdir(exist_ok=True)
         self.state_file = self.download_dir / 'scraper_state.json'
         self.storage_state_file = self.download_dir / 'browser_state.json'
         self.state = self._load_json(self.state_file, {'sent_pdfs': {}, 'processed_dates': []})
+        self._log_runtime_fingerprint()
+
+    def _log_runtime_fingerprint(self):
+        """Log runtime identity so we can confirm where scraper is running."""
+        local_now = datetime.now().astimezone()
+        utc_now = datetime.now(timezone.utc)
+        ship_tz = timezone(timedelta(hours=10))
+        ship_now = datetime.now(ship_tz)
+        logger.info("Runtime fingerprint:")
+        logger.info(f"  host={socket.gethostname()} platform={platform.platform()}")
+        logger.info(f"  script={Path(__file__).resolve()}")
+        logger.info(f"  cwd={Path.cwd()}")
+        logger.info(f"  config={self.config_path}")
+        logger.info(f"  tz_env={os.getenv('TZ', '(unset)')} tzname={time.tzname}")
+        logger.info(f"  now_local={local_now.isoformat()}")
+        logger.info(f"  now_utc={utc_now.isoformat()}")
+        logger.info(f"  now_ship_aest={ship_now.isoformat()}")
         
     def _load_config(self, config_path: str) -> dict:
         config = {
