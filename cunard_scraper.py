@@ -643,8 +643,9 @@ tell application "Reminders"
         set time of dueDate to (({due_hour} * hours) + ({due_minute} * minutes) + {due_second})
         set remindDate to dueDate - (15 * minutes)
         set newReminder to make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:dueDate}}
-        set |remind me| of newReminder to true
-        set |remind me date| of newReminder to remindDate
+        set newReminderId to id of newReminder
+        set newReminderRef to (first reminder whose id is newReminderId)
+        set remind me date of newReminderRef to remindDate
     end tell
 end tell
 '''
