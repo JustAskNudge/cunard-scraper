@@ -225,7 +225,11 @@ class CunardScraper:
     def _extract_date_from_pdf_url(self, pdf_url: str) -> Optional[str]:
         """Extract date from PDF URL query parameters.
         
-        Cunard PDF URLs typically contain ?date=YYYY-MM-DD
+        Cunard PDF URLs can contain:
+        - query param: ?date=YYYY-MM-DD
+        - path segment: /.../YYYY-MM-DD...
+        - compact path segment: /.../YYYYMMDD/... (e.g. digidocs DAILYPROGRAM)
+
         Returns the date string or None if not found.
         """
         try:
@@ -245,6 +249,13 @@ class CunardScraper:
                 date_str = path_date_match.group(1)
                 datetime.strptime(date_str, "%Y-%m-%d")
                 return date_str
+
+            # Try compact date format in path (e.g., /DAILYPROGRAM/20260311/)
+            path_compact_match = re.search(r'(?<!\d)(\d{8})(?!\d)', parsed.path)
+            if path_compact_match:
+                compact = path_compact_match.group(1)
+                parsed_date = datetime.strptime(compact, "%Y%m%d")
+                return parsed_date.strftime("%Y-%m-%d")
                 
         except (ValueError, IndexError) as e:
             logger.debug(f"Could not extract date from PDF URL: {e}")
@@ -744,33 +755,7 @@ end tell
                             elif match.startswith('/'):
                                 return f"https://myvoyage.cunard.com{match}"
                     
-                    # Try API endpoints that might return the PDF
-                    # Common patterns for ship daily programmes
-                    today = datetime.now()
-                    date_str = today.strftime("%Y-%m-%d")
-                    potential_urls = [
-                        f"https://myvoyage.cunard.com/api/dailyProgramme/pdf",
-                        f"https://myvoyage.cunard.com/api/pdf/daily",
-                        f"https://ship-cms.cunard.com/content/dailyprogramme/{date_str}.pdf",
-                        f"https://myvoyage.cunard.com/pdfviewer",
-                    ]
-                    
-                    for url in potential_urls:
-                        logger.info(f"Trying potential URL: {url}")
-                        try:
-                            # Try to fetch the URL
-                            response = await context.new_page()
-                            resp = await response.goto(url, wait_until='networkidle', timeout=10000)
-                            content_type = resp.headers.get('content-type', '')
-                            if 'pdf' in content_type.lower():
-                                logger.info(f"Found PDF at: {url}")
-                                return url
-                            await response.close()
-                        except Exception as e:
-                            logger.debug(f"URL {url} failed: {e}")
-                            continue
-                    
-                    logger.warning("Could not find PDF URL through direct URL probing; using extractor fallback")
+                    logger.info("No direct PDF URL in page HTML; using extractor fallback")
                 
                 pdf_url = await self._extract_pdf_url(page)
                 if not pdf_url:
