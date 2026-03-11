@@ -406,10 +406,19 @@ class CunardScraper:
                 text += page.extract_text() + "\n"
             lines = text.split('\n')
             for line in lines:
-                time_match = re.search(r'(\d{1,2}):(\d{2})', line)
+                time_match = re.search(r'(\d{1,2})\.(\d{2})', line)
                 if time_match:
                     time_str = time_match.group(0)
                     rest = line[time_match.end():].strip()
+                    # Parse title and venue from rest: "11.00am Event Name – Venue"
+                    # Split on en-dash '–' to separate title from venue
+                    if '–' in rest:
+                        title_part, venue_part = rest.split('–', 1)
+                        title = title_part.strip()
+                        venue = venue_part.strip()
+                    else:
+                        title = rest[:80]
+                        venue = ''
                     is_gala = any(word in line.lower() for word in ['gala', 'ball', '⭐'])
                     category = 'Other'
                     if is_gala:
@@ -420,7 +429,7 @@ class CunardScraper:
                         category = 'Theatre'
                     elif 'planetarium' in line.lower():
                         category = 'Planetarium'
-                    events.append(Event(time=time_str, title=rest[:80], venue='', category=category, is_gala=is_gala))
+                    events.append(Event(time=time_str, title=title, venue=venue, category=category, is_gala=is_gala))
         except Exception as e:
             logger.error(f"Error extracting events: {e}")
         logger.info(f"Extracted {len(events)} events")
@@ -433,6 +442,11 @@ class CunardScraper:
             events: List of Event objects
             date_str: Date string in YYYY-MM-DD format (from PDF)
         """
+        # Skip if Telegram reminders are disabled
+        if not self.config.get('enable_telegram_reminders', False):
+            logger.info("Telegram reminders disabled (enable_telegram_reminders not set to True)")
+            return
+        
         logger.info(f"Scheduling reminders for {len(events)} events on {date_str}")
         
         # Parse the PDF date and get current local time
@@ -752,8 +766,9 @@ class CunardScraper:
                 with open(pdf_path, 'wb') as f:
                     f.write(content)
                 
-                await self._send_pdf_to_telegram(filename, content)
-                
+                # Telegram PDF sending disabled - can be re-enabled if needed
+                # await self._send_pdf_to_telegram(filename, content)
+
                 events = self._extract_events_from_pdf(pdf_path)
                 if events:
                     self._schedule_reminders(events, pdf_date_str)
