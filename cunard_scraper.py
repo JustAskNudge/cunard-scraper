@@ -430,7 +430,17 @@ class CunardScraper:
         events = []
 
         # Exclusions filter (case insensitive)
-        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing", "jazz"]
+        exclusions = [
+            "line dancing",
+            "jewelry",
+            "jewellery",
+            "ballroom dancing",
+            "jazz",
+            "pianist",
+            "harpist",
+            "solo travellers",
+            "carat",
+        ]
         
         try:
             reader = PdfReader(str(pdf_path))
@@ -490,6 +500,18 @@ class CunardScraper:
                         or any(phrase in title_lower for phrase in non_event_phrases)
                     ):
                         continue
+
+                    # Drop lines that are mostly time ranges (e.g. "1.30pm 6.00pm - 9.00pm").
+                    title_no_times = re.sub(
+                        r'\b\d{1,2}\.\d{2}\s*(?:[ap]\.?\s*m\.?)?\b',
+                        ' ',
+                        title_lower,
+                        flags=re.IGNORECASE,
+                    )
+                    title_semantic = re.sub(r'\b(?:am|pm|to|and)\b', ' ', title_no_times, flags=re.IGNORECASE)
+                    title_semantic = re.sub(r'[^a-z]+', ' ', title_semantic).strip()
+                    if len(title_semantic) < 3:
+                        continue
                     
                     # Skip excluded events
                     if any(excl in title_lower for excl in exclusions):
@@ -533,7 +555,17 @@ class CunardScraper:
         now = datetime.now(ship_tz)
 
         # Exclusions filter (case insensitive)
-        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing", "jazz"]
+        exclusions = [
+            "line dancing",
+            "jewelry",
+            "jewellery",
+            "ballroom dancing",
+            "jazz",
+            "pianist",
+            "harpist",
+            "solo travellers",
+            "carat",
+        ]
 
         scheduled_count = 0
         skipped_count = 0
@@ -613,7 +645,8 @@ tell application "Reminders"
         set month of dueDate to {due_month}
         set day of dueDate to {due_day}
         set time of dueDate to (({due_hour} * hours) + ({due_minute} * minutes) + {due_second})
-        make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:dueDate}}
+        set remindDate to dueDate - (15 * minutes)
+        make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:dueDate, remind me date:remindDate}}
     end tell
 end tell
 '''
