@@ -462,9 +462,36 @@ class CunardScraper:
                     else:
                         title = rest[:80]
                         venue = ''
+
+                    # Normalize common extraction artifacts at start of title.
+                    title = re.sub(r'^[^\w]+', '', title).strip()
+                    venue = venue.strip()
+
+                    # Drop obvious non-event schedule/opening-hour fragments.
+                    title_lower = title.lower()
+                    non_event_prefixes = ('-', 'to ', 'and ', '&', ',')
+                    non_event_phrases = [
+                        'bar and lounge times',
+                        'breakfast',
+                        'lunch',
+                        'dinner',
+                        'day menu',
+                        'late night menu',
+                        'first sitting',
+                        'second sitting',
+                        'dress code',
+                        'tonight:',
+                    ]
+                    if (
+                        not title
+                        or len(title) < 4
+                        or not re.search(r'[A-Za-z]', title)
+                        or title_lower.startswith(non_event_prefixes)
+                        or any(phrase in title_lower for phrase in non_event_phrases)
+                    ):
+                        continue
                     
                     # Skip excluded events
-                    title_lower = title.lower()
                     if any(excl in title_lower for excl in exclusions):
                         logger.debug(f"Excluding event: {title}")
                         continue
