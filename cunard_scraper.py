@@ -16,7 +16,6 @@ from typing import List, Optional
 
 try:
     from playwright.async_api import async_playwright, Page, BrowserContext
-    import aiohttp
     from PyPDF2 import PdfReader
 except ImportError as e:
     print(f"Missing dependency: {e}")
@@ -53,8 +52,6 @@ class CunardScraper:
             'cunard_dob_day': os.getenv('CUNARD_DOB_DAY'),
             'cunard_dob_month': os.getenv('CUNARD_DOB_MONTH'),
             'cunard_dob_year': os.getenv('CUNARD_DOB_YEAR'),
-            'telegram_bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
-            'telegram_chat_id': os.getenv('TELEGRAM_CHAT_ID'),
             'download_dir': os.getenv('DOWNLOAD_DIR', 'downloads'),
             'headless': os.getenv('HEADLESS', 'false').lower() == 'true',
         }
@@ -399,6 +396,10 @@ class CunardScraper:
     def _extract_events_from_pdf(self, pdf_path: Path) -> List[Event]:
         logger.info(f"Extracting events from {pdf_path}")
         events = []
+        
+        # Exclusions filter (case insensitive)
+        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing"]
+        
         try:
             reader = PdfReader(str(pdf_path))
             text = ""
@@ -419,6 +420,13 @@ class CunardScraper:
                     else:
                         title = rest[:80]
                         venue = ''
+                    
+                    # Skip excluded events
+                    title_lower = title.lower()
+                    if any(excl in title_lower for excl in exclusions):
+                        logger.debug(f"Excluding event: {title}")
+                        continue
+                    
                     is_gala = any(word in line.lower() for word in ['gala', 'ball', '⭐'])
                     category = 'Other'
                     if is_gala:
@@ -436,18 +444,13 @@ class CunardScraper:
         return events
     
     def _schedule_reminders(self, events: List[Event], date_str: str):
-        """Schedule reminders for events, filtering out past events.
+        """Schedule Apple Reminders for events, filtering out past events and excluded categories.
         
         Args:
             events: List of Event objects
             date_str: Date string in YYYY-MM-DD format (from PDF)
         """
-        # Skip if Telegram reminders are disabled
-        if not self.config.get('enable_telegram_reminders', False):
-            logger.info("Telegram reminders disabled (enable_telegram_reminders not set to True)")
-            return
-        
-        logger.info(f"Scheduling reminders for {len(events)} events on {date_str}")
+        logger.info(f"Scheduling Apple Reminders for {len(events)} events on {date_str}")
         
         # Parse the PDF date and get current local time
         try:
@@ -457,87 +460,82 @@ class CunardScraper:
             return
         
         now = datetime.now()
-        current_date = now.date()
+        
+        # Exclusions filter (case insensitive)
+        exclusions = ["line dancing", "jewelry", "jewellery", "ballroom dancing"]
         
         scheduled_count = 0
         skipped_count = 0
+        excluded_count = 0
         
         for event in events:
             try:
+                # Skip excluded events
+                title_lower = event.title.lower()
+                if any(excl in title_lower for excl in exclusions):
+                    logger.info(f"Skipping excluded event: {event.title}")
+                    excluded_count += 1
+                    continue
+                
                 hour, minute = map(int, event.time.split(':'))
                 
                 # Create datetime for the event (using PDF date, local timezone)
                 event_datetime = datetime.combine(pdf_date, datetime.min.time().replace(hour=hour, minute=minute))
                 
-                # Calculate reminder time (15 mins before)
-                reminder_datetime = event_datetime - timedelta(minutes=15)
-                
-                # Skip if reminder time is in the past
-                if reminder_datetime < now:
+                # Skip if event is in the past
+                if event_datetime < now:
                     logger.info(f"Skipping past event: {event.title} at {event.time}")
                     skipped_count += 1
                     continue
                 
-                # Build cron expression for specific date
-                reminder_min = reminder_datetime.minute
-                reminder_hour = reminder_datetime.hour
-                reminder_day = reminder_datetime.day
-                reminder_month = reminder_datetime.month
-                
+                # Build reminder title and notes
                 emoji = "⭐" if event.is_gala else "🚢"
                 if event.category == 'Bingo':
                     emoji = "🎱"
                 elif event.category == 'Theatre':
                     emoji = "🎭"
                 
-                reminder_text = f"{emoji} Starting in 15 mins: {event.title}\n🕐 {event.time}"
-                safe_title = re.sub(r'[^\w]', '_', event.title[:20])
-                job_name = f"cunard_{date_str}_{safe_title}"
+                reminder_title = f"{emoji} {event.title}"
+                reminder_notes = f"🕐 {event.time}\n📍 {event.venue}\n📅 {date_str}"
                 
-                # Cron for specific date: min hour day month *
-                cron_expr = f"{reminder_min} {reminder_hour} {reminder_day} {reminder_month} *"
+                # Calculate alarm time (15 mins before event)
+                alarm_datetime = event_datetime - timedelta(minutes=15)
+                alarm_date_str = alarm_datetime.strftime("%Y-%m-%d")
+                alarm_time_str = alarm_datetime.strftime("%H:%M:%S")
                 
-                cmd = [
-                    'openclaw', 'message', 'send',
-                    '--target', self.config['telegram_chat_id'],
-                    '--channel', 'telegram',
-                    '--message', reminder_text
-                ]
+                # AppleScript to create reminder with 15-minute alert
+                # Format date for AppleScript: YYYY-MM-DD HH:MM:SS
+                due_date_str = event_datetime.strftime("%Y-%m-%d %H:%M:%S")
                 
-                result = subprocess.run([
-                    'openclaw', 'cron', 'add',
-                    '--name', job_name,
-                    '--schedule', cron_expr,
-                    '--command', ' '.join(cmd)
-                ], capture_output=True, text=True)
+                applescript = f'''
+tell application "Reminders"
+    tell list "Ship Reminders"
+        set newReminder to make new reminder with properties {{name:"{reminder_title}", body:"{reminder_notes}", due date:date "{due_date_str}"}}
+        -- Set 15-minute alert before due date
+        set allday of newReminder to false
+    end tell
+end tell
+'''
+                
+                # Run osascript to create the reminder
+                result = subprocess.run(
+                    ['osascript', '-e', applescript],
+                    capture_output=True,
+                    text=True
+                )
                 
                 if result.returncode == 0:
-                    logger.info(f"Scheduled reminder for {event.time} - {event.title[:40]} (runs once on {reminder_datetime.strftime('%Y-%m-%d %H:%M')})")
+                    logger.info(f"Created reminder for {event.time} - {event.title[:40]}")
                     scheduled_count += 1
                 else:
-                    logger.error(f"Failed to schedule reminder: {result.stderr}")
+                    logger.error(f"Failed to create reminder: {result.stderr}")
                     
             except Exception as e:
                 logger.error(f"Error scheduling reminder: {e}")
         
-        logger.info(f"Reminder scheduling complete: {scheduled_count} scheduled, {skipped_count} skipped (past events)")
+        logger.info(f"Reminder scheduling complete: {scheduled_count} created, {skipped_count} skipped (past), {excluded_count} excluded")
     
-    async def _send_pdf_to_telegram(self, filename: str, content: bytes):
-        logger.info(f"Sending PDF to Telegram: {filename}")
-        bot_token = self.config['telegram_bot_token']
-        chat_id = self.config['telegram_chat_id']
-        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-        data = aiohttp.FormData()
-        data.add_field('chat_id', chat_id)
-        data.add_field('document', content, filename=filename, content_type='application/pdf')
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data) as response:
-                result = await response.json()
-                if result.get('ok'):
-                    logger.info("PDF sent successfully")
-                    return True
-                logger.error(f"Telegram error: {result}")
-                return False
+
     
     async def run(self):
         async with async_playwright() as p:
@@ -765,9 +763,6 @@ class CunardScraper:
                 pdf_path = self.download_dir / filename
                 with open(pdf_path, 'wb') as f:
                     f.write(content)
-                
-                # Telegram PDF sending disabled - can be re-enabled if needed
-                # await self._send_pdf_to_telegram(filename, content)
 
                 events = self._extract_events_from_pdf(pdf_path)
                 if events:
