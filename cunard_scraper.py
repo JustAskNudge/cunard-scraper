@@ -79,7 +79,8 @@ class CunardScraper:
         if Path(config_path).exists():
             with open(config_path) as f:
                 file_config = json.load(f)
-                config.update({k: v for k, v in file_config.items() if v is not None})
+                # Don't allow config file to override headless - use env var only
+                config.update({k: v for k, v in file_config.items() if v is not None and k != 'headless'})
         return config
     
     def _load_json(self, path: Path, default: dict) -> dict:
