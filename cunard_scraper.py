@@ -590,7 +590,7 @@ class CunardScraper:
                     raise ValueError(f"Cannot parse time: {event.time}")
                 
                 # Convert 12-hour to 24-hour format
-                if is_pm and hour != 12:
+                if is_pm and hour < 12:
                     hour += 12
                 elif is_am and hour == 12:
                     hour = 0
