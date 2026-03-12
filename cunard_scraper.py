@@ -74,7 +74,7 @@ class CunardScraper:
             'cunard_dob_month': os.getenv('CUNARD_DOB_MONTH'),
             'cunard_dob_year': os.getenv('CUNARD_DOB_YEAR'),
             'download_dir': os.getenv('DOWNLOAD_DIR', 'downloads'),
-            'headless': os.getenv('HEADLESS', 'false').lower() == 'true',
+            'headless': os.getenv('HEADLESS', 'true').lower() == 'true',
         }
         if Path(config_path).exists():
             with open(config_path) as f:
